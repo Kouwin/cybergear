@@ -36,11 +36,15 @@ void get_color_and_mode_str(uint8_t mode, uint16_t & color, String & mode_str);
 
 // setup master can id and motor can id (default cybergear can id is 0x7F)
 uint8_t MASTER_CAN_ID = 0x00;
-uint8_t MOT_CAN_ID = 0x7F;
+uint8_t MOT_CAN_ID1 = 0x7F;
+uint8_t MOT_CAN_ID2 = 0x7E;
+
 
 // init cybergeardriver
-CybergearDriver driver = CybergearDriver(MASTER_CAN_ID, MOT_CAN_ID);
-MotorStatus motor_status;
+CybergearDriver driver1 = CybergearDriver(MASTER_CAN_ID, MOT_CAN_ID1);
+CybergearDriver driver2 = CybergearDriver(MASTER_CAN_ID, MOT_CAN_ID2);
+MotorStatus motor_status1;
+MotorStatus motor_status2;
 #ifdef USE_ESP32_CAN
 CybergearCanInterfaceEsp32 interface;
 #else
@@ -51,23 +55,28 @@ CybergearCanInterfaceMcp interface;
 TFT_eSprite sprite = TFT_eSprite(&sprite);
 
 uint8_t mode = MODE_POSITION;   //!< current mode
-float target_pos = 0.0;         //!< motor target position
+float target_pos1 = 0.0;         //!< motor target position
+float target_pos2 = 0.0;         //!< motor target position
 float target_vel = 0.0;         //!< motor target velocity
 float target_torque = 0.0;      //!< motor target torque
 float dir = 1.0f;               //!< direction for motion mode
 float default_kp = 50.0f;       //!< default kp for motion mode
 float default_kd = 1.0f;        //!< default kd for motion mode
 float init_speed = 5.0f;       //!< initial speed
-float slow_speed = 0.4f;        //!< slow speed
-bool state_change_flag = false; //!< state change flag
+float slow_speed = 0.8f;        //!< slow speed
+bool state_change_flag1 = false; //!< state change flag
+bool state_change_flag2 = false; //!< state change flag
 
 float free_rotation_sensitivity = 0.1f; //!< トルク感度（外力の小さな変化で回転しやすくする）
-float max_free_rotation_speed = 0.5f;   //!< 自由回転モード時の最大速度
+float max_free_rotation_speed = 0.8f;   //!< 自由回転モード時の最大速度
 
 float M = 0.5f;   // 質量
-float B = 0.8f;   // 減衰
+float B = 0.01f;   // 粘性
 float K = 0.01f;   // 剛性
 float v = 0.0;
+float G = 0.1f; //重力補償
+
+
 
 
 
@@ -89,10 +98,15 @@ void setup()
   interface.init();
 #endif
 
-  driver.init(&interface);
-  driver.init_motor(mode);
-  driver.set_limit_speed(init_speed);
-  driver.enable_motor();
+  driver1.init(&interface);
+  driver1.init_motor(mode);
+  driver1.set_limit_speed(init_speed);
+  driver1.enable_motor();
+
+  driver2.init(&interface);
+  driver2.init_motor(mode);
+  driver2.set_limit_speed(init_speed);
+  driver2.enable_motor();
 
   // display current status
   draw_display(mode, true);
@@ -116,7 +130,7 @@ void draw_display(uint8_t mode, bool is_mode_change)
   sprite.println("");
   sprite.println("=== Target ===");
   sprite.print("Position:");
-  sprite.print(target_pos);
+  sprite.print(target_pos2);
   sprite.println(" rad");
   sprite.print("Velocity:");
   sprite.print(target_vel);
@@ -128,13 +142,13 @@ void draw_display(uint8_t mode, bool is_mode_change)
 
   sprite.println("=== Current ===");
   sprite.print("Position:");
-  sprite.print(motor_status.position);
+  sprite.print(motor_status2.position);
   sprite.println(" rad");
   sprite.print("Velocity:");
-  sprite.print(motor_status.velocity);
+  sprite.print(motor_status2.velocity);
   sprite.println(" rad/s");
   sprite.print("Effort : ");
-  sprite.print(motor_status.effort);
+  sprite.print(motor_status2.effort);
   sprite.println(" Nm");
 
   sprite.pushSprite(0, 0);
@@ -171,17 +185,22 @@ void loop()
   // check mode change
   if(M5.BtnB.wasPressed()) {
     mode = (mode + 1) % MODE_CURRENT + 1;
-    state_change_flag = true;
-    driver.init_motor(mode);
-    driver.enable_motor();
-    target_pos = motor_status.position;
+    state_change_flag1 = true;
+    state_change_flag2 = true;
+    driver1.init_motor(mode);
+    driver1.enable_motor();
+    driver2.init_motor(mode);
+    driver2.enable_motor();
+    target_pos1 = motor_status1.position;
+    target_pos2 = motor_status2.position;
     target_vel = 0.0;
     target_torque = 0.0;
     draw_display(mode, true);
 
-  } else if (M5.BtnC.wasPressed()) {
+  }
+ else if (M5.BtnC.wasPressed()) {
     if (mode == MODE_POSITION) {
-      target_pos += INC_POSITION / 180.0f * M_PI;
+      target_pos1 += INC_POSITION / 180.0f * M_PI;
 
     } else if (mode == MODE_SPEED) {
       target_vel += INC_VELOCITY;
@@ -193,7 +212,7 @@ void loop()
 
   } else if (M5.BtnA.wasPressed()) {
     if (mode == MODE_POSITION) {
-      target_pos -= INC_POSITION / 180.0f * M_PI;
+      target_pos1 -= INC_POSITION / 180.0f * M_PI;
 
     } else if (mode == MODE_SPEED) {
       target_vel -= INC_VELOCITY;
@@ -204,28 +223,47 @@ void loop()
     draw_display(mode);
   }
 
-  if (driver.get_run_mode() == MODE_POSITION) {
+  if (driver1.get_run_mode() == MODE_POSITION) {
+
     // set limit speed when state changed
-    if (state_change_flag) {
-      driver.set_limit_speed(slow_speed);
-      state_change_flag = false;
+    if (state_change_flag1) {
+      driver1.set_limit_speed(slow_speed);
+      state_change_flag1 = false;
     }
-    if (std::fabs(motor_status.position - target_pos) < 10.0 / 180.0 * M_PI) {
-      driver.set_limit_speed(slow_speed);
-    }//driver.set_position_ref
+    if (std::fabs(motor_status1.position - target_pos1) < 10.0 / 180.0 * M_PI) {
+      driver1.set_limit_speed(slow_speed);
+    }//driver1.set_position_ref;
+
+    // set limit speed when state changed
+    if (state_change_flag2) {
+      driver2.set_limit_speed(slow_speed);
+      state_change_flag2 = false;
+    }
+    if (std::fabs(motor_status2.position - target_pos2) < 10.0 / 180.0 * M_PI) {
+      driver2.set_limit_speed(slow_speed);
+    }//driver.set_position_ref;
 
    
 
-    if (std::fabs(motor_status.effort) > free_rotation_sensitivity) {
-      float acceleration = (motor_status.effort - B * motor_status.velocity - K * motor_status.position) / M;
-      v = acceleration / 50;  // Δt = 0.01s（サンプリング周期）
-      target_pos -= v / 1;
+    if (std::fabs(motor_status2.effort) > free_rotation_sensitivity) {
+      float acceleration = (motor_status2.effort - B * motor_status2.velocity - K * motor_status2.position - G) / M;
+      v = acceleration / 25;  // Δt = 0.01s（サンプリング周期）
+      target_pos2 -= v / 1;
+      
     }
+    // if (motor_status2.effort > free_rotation_sensitivity) {
+    //   float acceleration = (motor_status2.effort - B * motor_status2.velocity - K * motor_status2.position ) / M;
+    //   v = acceleration / 25;  // Δt = 0.01s（サンプリング周期）
+    //   target_pos2 -= v / 1;
+      
+    // }
+    //sprite.println("アドミッタンス");
+    driver2.set_position_ref(target_pos2);
+    driver1.set_position_ref(target_pos1);
     
-    driver.set_position_ref(target_pos);
   }
-  else if (driver.get_run_mode() == MODE_SPEED) {
-    float external_force = motor_status.effort;
+  else if (driver1.get_run_mode() == MODE_SPEED) {
+    float external_force = motor_status1.effort;
     if (std::fabs(external_force) > free_rotation_sensitivity) {
       // 外力が感度閾値を超えた場合、速度を設定
       target_vel = -max_free_rotation_speed * (external_force > 0 ? 1.0f : -1.0f);
@@ -233,22 +271,32 @@ void loop()
         // 外力が小さい場合は停止
         target_vel = 0.0f;
         }
-    driver.set_speed_ref(target_vel);
+    driver1.set_speed_ref(target_vel);
   }
-  else if (driver.get_run_mode() == MODE_CURRENT) {
-    driver.set_current_ref(target_torque);
+  else if (driver1.get_run_mode() == MODE_CURRENT) {
+    driver1.set_current_ref(target_torque);
   }
   
   else {
-    target_pos += dir * 10.0 / 180.0 * M_PI;
-    if (target_pos > P_MAX) { dir = -1.0; target_pos = P_MAX; }
-    else if (target_pos < P_MIN) { dir = 1.0; target_pos = P_MIN; }
-    driver.motor_control(target_pos, dir * target_vel, dir * target_torque, default_kd, default_kd);
+    target_pos1 += dir * 10.0 / 180.0 * M_PI;
+    if (target_pos1 > P_MAX) { dir = -1.0; target_pos1 = P_MAX; }
+    else if (target_pos1 < P_MIN) { dir = 1.0; target_pos1 = P_MIN; }
+
+    target_pos2 += dir * 10.0 / 180.0 * M_PI;
+    if (target_pos2 > P_MAX) { dir = -1.0; target_pos2 = P_MAX; }
+    else if (target_pos2 < P_MIN) { dir = 1.0; target_pos2 = P_MIN; }
+
+    driver1.motor_control(target_pos1, dir * target_vel, dir * target_torque, default_kd, default_kd);
+    driver2.motor_control(target_pos2, dir * target_vel, dir * target_torque, default_kd, default_kd);
   }
 
   // update and get motor data
-  if ( driver.process_packet() ) {
-    motor_status = driver.get_motor_status();
+  if ( driver1.process_packet()) {
+    motor_status1 = driver1.get_motor_status();
+    draw_display(mode);
+  }
+  if ( driver2.process_packet()) {
+    motor_status2 = driver2.get_motor_status();
     draw_display(mode);
   }
 
